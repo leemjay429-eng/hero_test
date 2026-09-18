@@ -163,16 +163,41 @@
                           이미 시선에 들어오므로. 루프로 돌아온 뒤에는 hold 적용 */
   };
 
-  /* 릴 생성: 슬라이드 장수, 전체 길이, 키프레임 위치를 모두 자동 계산 */
-  function startReel(){
+  /* 릴 생성: 칸 높이와 이동 거리를 px로 직접 계산해 박아넣는다.
+     CSS의 height:500% / flex:0 0 20% / translate(-40%)는 모두 aspect-ratio로
+     만들어진 박스에 대한 퍼센트라 브라우저마다 해석이 갈린다. 조금만 어긋나도
+     칸이 밀려 배경색이 비치므로, 측정한 실제 px 값만 사용한다. */
+  var reelAnim = null;
+
+  function buildReel(){
+    var scr  = hero.querySelector('.gj-screen');
     var reel = hero.querySelector('.gj-reel');
-    if(!reel || !reel.animate) return;                 /* 미지원 시 1번 사진 고정 */
+    if(!scr || !reel || !reel.animate) return;                 /* 미지원 시 1번 사진 고정 */
     if(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-    var cells = reel.children.length;                  /* 사진 4장 + 1번 복제본 = 5칸 */
-    var n     = cells - 1;                             /* 실제로 보여줄 장수 */
+    /* 화면 구멍의 정확한 높이(소수점 포함). transform 회전에 영향받지 않는 값 */
+    var h = parseFloat(getComputedStyle(scr).height);
+    if(!(h > 0)){ requestAnimationFrame(buildReel); return; }  /* 레이아웃 전이면 재시도 */
+
+    var cells = reel.children.length;                          /* 사진 4장 + 1번 복제 = 5칸 */
+    var n     = cells - 1;                                     /* 실제로 보여줄 장수 */
     if(n < 1) return;
-    var step  = 100 / cells;                           /* 한 칸이 트랙에서 차지하는 % */
+
+    /* 칸 높이를 px로 고정. 컬럼 플렉스에서는 flex-basis가 height를 이기므로 함께 지정 */
+    reel.style.height = (cells * h) + 'px';
+    for(var k = 0; k < cells; k++){
+      reel.children[k].style.flex   = '0 0 ' + h + 'px';
+      reel.children[k].style.height = h + 'px';
+    }
+
+    /* 되감기 순간 릴이 한 프레임 비어도 파란 배경이 드러나지 않도록 1번을 바닥에 깔아둠.
+       되감기 시점에 보여야 할 그림이 어차피 1번이라 눈에 띄지 않는다. */
+    if(!reel.previousElementSibling){
+      var back = reel.children[0].cloneNode(false);
+      back.className = 'gj-back';
+      back.setAttribute('aria-hidden', 'true');
+      reel.parentNode.insertBefore(back, reel);
+    }
 
     var holds = [], i;
     for(i = 0; i < n; i++){
@@ -184,41 +209,51 @@
     var ease = (getComputedStyle(hero).getPropertyValue('--ease') || '').trim()
                || 'cubic-bezier(.65,0,.35,1)';
 
-    /* 루프가 마지막 칸(1번 복제)에서 첫 칸으로 되감길 때 트랙이 한 번에 크게
-       점프하는데, GPU 레이어 재래스터로 한 프레임 비면 .gj-screen의 파란
-       배경이 드러난다. 되감기 시점에 보여야 할 그림은 어차피 1번이므로
-       1번을 릴 바닥에 깔아 그 틈을 막는다. (이미 디코딩된 이미지 재사용) */
-    if(!reel.previousElementSibling){
-      var back = reel.children[0].cloneNode(false);
-      back.className = 'gj-back';
-      back.setAttribute('aria-hidden', 'true');
-      reel.parentNode.insertBefore(back, reel);
-    }
-
-    /* 각 사진마다 [정지 시작] → [정지 끝] 두 점을 찍고, 정지 끝에서 다음 칸으로 밀어냄 */
+    /* 사진마다 [정지 시작] → [정지 끝] 두 점을 찍고, 정지 끝에서 다음 칸으로 밀어낸다 */
     var frames = [], t = 0;
     for(i = 0; i < n; i++){
-      var y = 'translate3d(0,' + (-(i * step)) + '%,0)';
+      var y = 'translate3d(0,' + (-(i * h)).toFixed(3) + 'px,0)';
       frames.push({ offset: t / total, transform: y, easing: 'linear' });
       t += holds[i];
       frames.push({ offset: t / total, transform: y, easing: ease });
       t += REEL.slide;
     }
-    frames.push({ offset: 1, transform: 'translate3d(0,' + (-(n * step)) + '%,0)' });
+    frames.push({ offset: 1, transform: 'translate3d(0,' + (-(n * h)).toFixed(3) + 'px,0)' });
 
-    /* 1번을 짧게 보여주는 방법: 루프를 조금 앞질러서 시작.
-       짧게 할 시간만큼 첫 바퀴의 앞부분을 잘라내므로, 두 번째 바퀴부터는
-       1번도 다른 사진과 똑같이 hold 만큼 머뭅니다.
-       firstHold가 hold보다 길면 대신 시작을 그만큼 늦춥니다. */
-    var diff = REEL.firstHold - holds[0];
+    /* 1번만 짧게 보여주는 방법: 루프의 첫 정지 구간을 잘라먹고 시작한다.
+       잘려나가는 구간은 트랙이 멈춰 있는 시간이라 눈에 보이는 움직임이 없으므로,
+       시작 딜레이를 그만큼 앞당기는 것만으로 충분하다.
+       (iterationStart 같은 덜 보편적인 기능을 쓰지 않는다) */
+    var delay = REEL.start - holds[0] + REEL.firstHold;
+    if(delay < 0) delay = 0;
 
-    reel.animate(frames, {
-      duration:       total * 1000,
-      delay:          (REEL.start + Math.max(diff, 0)) * 1000,
-      iterationStart: Math.max(-diff, 0) / total,
-      iterations:     Infinity,
-      fill:           'both'
+    var resume = reelAnim ? reelAnim.currentTime : null;       /* 리사이즈 시 진행 위치 유지 */
+    if(reelAnim) reelAnim.cancel();
+    reelAnim = reel.animate(frames, {
+      duration:   total * 1000,
+      delay:      delay * 1000,
+      iterations: Infinity,
+      fill:       'both'
     });
+    if(resume != null) reelAnim.currentTime = resume;
+  }
+
+  /* 폭이 바뀌면 px 값을 다시 계산 (진행 중인 위치는 그대로 이어받음) */
+  function watchResize(){
+    var scr = hero.querySelector('.gj-screen');
+    if(!scr) return;
+    if(window.ResizeObserver){
+      var last = 0, ro = new ResizeObserver(function(){
+        var h = parseFloat(getComputedStyle(scr).height);
+        if(Math.abs(h - last) > 0.5){ last = h; if(reelAnim) buildReel(); }
+      });
+      ro.observe(scr);
+    } else {
+      var tm;
+      window.addEventListener('resize', function(){
+        clearTimeout(tm); tm = setTimeout(function(){ if(reelAnim) buildReel(); }, 150);
+      });
+    }
   }
 
   /* 모든 이미지를 디코딩까지 끝낸 뒤 시작 (등장 중 디코딩으로 생기는 프레임 끊김 방지) */
@@ -244,7 +279,8 @@
     if(fired) return; fired = true;
     whenDecoded(function(){
       hero.classList.add('is-in');
-      startReel();
+      buildReel();
+      watchResize();
       var phone = hero.querySelector('.gj-phone');
       if(!phone) { hero.classList.add('gj-live'); return; }
       phone.addEventListener('animationend', function(){
