@@ -64,6 +64,12 @@
   background:#0b3e63;
 }
 /* 세로 릴 트랙: 슬라이드 4장 + 1번 복제 = 5칸 */
+/* 되감기 순간 파란 배경이 비치지 않도록 1번 사진을 바닥에 깔아둠 (JS가 삽입) */
+#gjHero .gj-back{
+  position:absolute; left:0; top:0;
+  width:100%; height:100%;
+  object-fit:cover; object-position:center;
+}
 #gjHero .gj-reel{
   position:absolute; left:0; top:0;
   width:100%; height:500%;
@@ -177,6 +183,17 @@
 
     var ease = (getComputedStyle(hero).getPropertyValue('--ease') || '').trim()
                || 'cubic-bezier(.65,0,.35,1)';
+
+    /* 루프가 마지막 칸(1번 복제)에서 첫 칸으로 되감길 때 트랙이 한 번에 크게
+       점프하는데, GPU 레이어 재래스터로 한 프레임 비면 .gj-screen의 파란
+       배경이 드러난다. 되감기 시점에 보여야 할 그림은 어차피 1번이므로
+       1번을 릴 바닥에 깔아 그 틈을 막는다. (이미 디코딩된 이미지 재사용) */
+    if(!reel.previousElementSibling){
+      var back = reel.children[0].cloneNode(false);
+      back.className = 'gj-back';
+      back.setAttribute('aria-hidden', 'true');
+      reel.parentNode.insertBefore(back, reel);
+    }
 
     /* 각 사진마다 [정지 시작] → [정지 끝] 두 점을 찍고, 정지 끝에서 다음 칸으로 밀어냄 */
     var frames = [], t = 0;
